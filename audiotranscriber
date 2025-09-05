@@ -1,0 +1,64 @@
+// api/transcribe.js
+import fetch from "node-fetch";
+import fs from "fs";
+
+export const config = {
+  api: { bodyParser: false },
+};
+
+import { IncomingForm } from "formidable";
+const parseForm = (req) =>
+  new Promise((resolve, reject) => {
+    const form = new IncomingForm({ multiples: false, keepExtensions: true });
+    form.parse(req, (err, fields, files) =>
+      err ? reject(err) : resolve({ fields, files })
+    );
+  });
+
+export default async function handler(req, res) {
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Método no permitido" });
+  }
+
+  try {
+    const { files, fields } = await parseForm(req);
+    const audio = files?.audio;
+    if (!audio) {
+      return res.status(400).json({ error: "Falta archivo 'audio'" });
+    }
+
+    const language = fields.language || "auto";
+    const responseFormat = fields.format || "json";
+
+    const formData = new FormData();
+    formData.append(
+      "file",
+      new Blob([await fs.promises.readFile(audio.filepath)]),
+      audio.originalFilename || "audio.mp3"
+    );
+    formData.append("model", "whisper-1");
+    if (language !== "auto") formData.append("language", language);
+    formData.append("response_format", responseFormat);
+
+    const openaiResp = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+      body: formData,
+    });
+
+    if (!openaiResp.ok) {
+      const err = await openaiResp.text();
+      return res.status(openaiResp.status).json({ error: "Error OpenAI", detail: err });
+    }
+
+    const result = await openaiResp.json();
+
+    res.status(200).json({
+      ok: true,
+      transcript: result.text || result,
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Error del servidor", detail: String(e) });
+  }
+}
